@@ -131,23 +131,19 @@ if "score" not in st.session_state:
     st.session_state.score = {"total": 0, "correct": 0}
 
 
+@st.cache_data(ttl=3600)
 def fetch_data(ticker_code: str):
-    """yfinanceで株価データを取得"""
-    ticker = yf.Ticker(ticker_code)
-    # 3年分取得（カット余裕のため）
-    df = ticker.history(period="3y")
-    if df.empty:
-        return None, None, {}
-    info = ticker.info
-    name = info.get("longName") or info.get("shortName") or ticker_code
-    stock_info = {
-        "name": name,
-        "sector": info.get("sector", ""),
-        "industry": info.get("industry", ""),
-        "summary": info.get("longBusinessSummary", ""),
-        "market_cap": info.get("marketCap"),
-    }
-    return df, name, stock_info
+    """yfinanceで株価データを取得（ticker.infoは使わない）"""
+    try:
+        df = yf.download(ticker_code, period="3y", progress=False, auto_adjust=True)
+        if df.empty or len(df) < 300:
+            return None, ticker_code, {}
+        # MultiIndex対応（yfinance 0.2以降）
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df, ticker_code, {}
+    except Exception:
+        return None, ticker_code, {}
 
 
 def calc_ma(df: pd.DataFrame):
@@ -239,8 +235,8 @@ if st.session_state.phase == "input":
             with st.spinner("データ取得中..."):
                 df, name, stock_info = fetch_data(ticker_code)
 
-            if df is None or len(df) < 300:
-                st.error("データを取得できませんでした。銘柄コードを確認してください。")
+            if df is None:
+                st.error("データ取得に失敗しました。時間を置いて再試行してください。")
             else:
                 df = calc_ma(df)
 
@@ -280,24 +276,7 @@ elif st.session_state.phase == "predict":
     # 表示は直近約1.5年分
     df_display = df_show.tail(380)
 
-    info = st.session_state.stock_info
     st.subheader(f"{ticker}  {name}")
-
-    # 会社概要
-    meta_parts = []
-    if info.get("sector"):
-        meta_parts.append(f"セクター: {info['sector']}")
-    if info.get("industry"):
-        meta_parts.append(f"業種: {info['industry']}")
-    if info.get("market_cap"):
-        cap = info["market_cap"]
-        cap_str = f"{cap/1e12:.1f}兆円" if cap >= 1e12 else f"{cap/1e8:.0f}億円"
-        meta_parts.append(f"時価総額: {cap_str}")
-    if meta_parts:
-        st.caption("  |  ".join(meta_parts))
-    if info.get("summary"):
-        with st.expander("会社概要"):
-            st.write(info["summary"])
 
     st.caption(f"チャート表示期間: {df_display.index[0].date()} 〜 {cut_date.date()}　（この後3ヶ月を予想）")
 
